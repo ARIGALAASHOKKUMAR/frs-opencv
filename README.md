@@ -67,9 +67,11 @@ Open the app using Expo Go on a phone or an iOS/Android simulator. The Render
 API URL is prefilled; open **Server settings** if you need to change it.
 
 Tap **Connect**, allow camera permission, then register a face. Registration
-captures 5 samples, taking a few seconds; look at the camera and move your
-head slightly. When clocking in or out, look at the camera and blink after the
-app detects a face match. The app displays the recorded time, disables the
+temporarily raises the screen brightness and captures 5 samples while showing
+a face-position guide; brightness is restored when registration finishes or
+is cancelled. When clocking in or out, the app checks frames only during the
+active action, shows a verification spinner after a face match, and requires a
+blink to record attendance. It then displays the recorded time, disables the
 completed action, enables the next action, and shows the shift duration.
 
 The Expo app is written in plain JavaScript (`App.jsx`), not TypeScript. The

@@ -1,9 +1,11 @@
 import { StatusBar } from 'expo-status-bar';
+import * as Brightness from 'expo-brightness';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Keyboard,
   Pressable,
   ScrollView,
@@ -85,10 +87,33 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [showRegistration, setShowRegistration] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [verificationStage, setVerificationStage] = useState('scanning');
   const [now, setNow] = useState(Date.now());
   const cameraRef = useRef(null);
   const modeRef = useRef({ type: 'idle', sessionId: null });
   const busyRef = useRef(false);
+  const previousBrightnessRef = useRef(null);
+
+  const brightenScreen = useCallback(async () => {
+    if (previousBrightnessRef.current !== null) return;
+    if (!(await Brightness.isAvailableAsync())) {
+      throw new Error('Automatic screen brightness is unavailable on this device.');
+    }
+    const previousBrightness = await Brightness.getBrightnessAsync();
+    previousBrightnessRef.current = previousBrightness;
+    await Brightness.setBrightnessAsync(1);
+  }, []);
+
+  const restoreScreenBrightness = useCallback(async () => {
+    const previousBrightness = previousBrightnessRef.current;
+    if (previousBrightness === null) return;
+    previousBrightnessRef.current = null;
+    try {
+      await Brightness.setBrightnessAsync(previousBrightness);
+    } catch (error) {
+      setStatus(`Could not restore screen brightness: ${error.message}`);
+    }
+  }, []);
 
   const refreshStatus = useCallback(async () => {
     const result = await requestApi(apiUrl, '/api/status');
@@ -121,11 +146,37 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') {
+        restoreScreenBrightness();
+      } else if (modeRef.current.type === 'register') {
+        brightenScreen().catch((error) => {
+          setStatus(`Could not increase screen brightness: ${error.message}`);
+        });
+      }
+    });
+    return () => subscription.remove();
+  }, [brightenScreen, restoreScreenBrightness]);
+
+  useEffect(
+    () => () => {
+      const previousBrightness = previousBrightnessRef.current;
+      if (previousBrightness !== null) {
+        Brightness.setBrightnessAsync(previousBrightness).catch((error) => {
+          console.warn(`Could not restore screen brightness: ${error.message}`);
+        });
+      }
+    },
+    [],
+  );
+
   const stopFlow = useCallback(() => {
     const current = modeRef.current;
     modeRef.current = { type: 'idle', sessionId: null };
     setMode('idle');
     setCameraReady(false);
+    restoreScreenBrightness();
     if (current.type === 'register') {
       requestApi(apiUrl, '/api/register/cancel', {}).catch((error) => {
         setStatus(`Stopped on this device. Could not cancel on the server: ${error.message}`);
@@ -137,11 +188,11 @@ export default function App() {
         setStatus(`Stopped on this device. Could not cancel on the server: ${error.message}`);
       });
     }
-  }, [apiUrl]);
+  }, [apiUrl, restoreScreenBrightness]);
 
   useEffect(() => {
     if (mode === 'idle' || !cameraReady) return undefined;
-    const interval = mode === 'register' ? 160 : 120;
+    const interval = mode === 'register' ? 160 : 220;
     const timer = setInterval(async () => {
       if (busyRef.current || !cameraRef.current) return;
       busyRef.current = true;
@@ -167,6 +218,7 @@ export default function App() {
             setProfile(result.name);
             setShowRegistration(false);
             setStatus(`Face registration complete for ${result.name}.`);
+            restoreScreenBrightness();
             await refreshStatus();
           } else {
             setProgress(result.collected || 0);
@@ -183,11 +235,19 @@ export default function App() {
             session_id: current.sessionId,
             image: photo.base64,
           });
-          setStatus(result.message || 'Checking your face…');
+          if (result.status === 'matched' || result.status === 'blink_required') {
+            setVerificationStage('matched');
+            setStatus('Face matched. Blink once to record attendance.');
+          } else {
+            setVerificationStage('scanning');
+            setStatus(result.message || 'Looking for your registered face…');
+          }
           if (result.status === 'recorded') {
             modeRef.current = { type: 'idle', sessionId: null };
             setMode('idle');
             setCameraReady(false);
+            setVerificationStage('scanning');
+            setStatus(result.message || 'Attendance recorded.');
             await refreshStatus();
           }
         }
@@ -196,13 +256,14 @@ export default function App() {
         setMode('idle');
         setCameraReady(false);
         setStatus(error.message);
+        restoreScreenBrightness();
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
     }, interval);
     return () => clearInterval(timer);
-  }, [apiUrl, cameraReady, mode, refreshStatus]);
+  }, [apiUrl, cameraReady, mode, refreshStatus, restoreScreenBrightness]);
 
   const connect = async () => {
     Keyboard.dismiss();
@@ -246,13 +307,22 @@ export default function App() {
     setLoading(true);
     try {
       await requestApi(apiUrl, '/api/register/start', { name: registrationName });
+      let brightnessMessage = '';
+      try {
+        await brightenScreen();
+      } catch (error) {
+        brightnessMessage = ` Screen brightness could not be increased: ${error.message}`;
+      }
       modeRef.current = { type: 'register', sessionId: null };
       setCameraReady(false);
       setProgress(0);
       setMode('register');
-      setStatus(`Look at the camera while we capture ${REQUIRED_SAMPLES} samples.`);
+      setStatus(
+        `Look at the camera while we capture ${REQUIRED_SAMPLES} samples.${brightnessMessage}`,
+      );
     } catch (error) {
       setStatus(error.message);
+      restoreScreenBrightness();
     } finally {
       setLoading(false);
     }
@@ -277,6 +347,7 @@ export default function App() {
     try {
       const result = await requestApi(apiUrl, '/api/attendance/start', { action });
       modeRef.current = { type: 'attendance', sessionId: result.session_id };
+      setVerificationStage('scanning');
       setCameraReady(false);
       setMode('attendance');
       setStatus(`Ready for ${action}. Look at the camera, then blink to record.`);
@@ -387,16 +458,44 @@ export default function App() {
                   onCameraReady={() => setCameraReady(true)}
                   onMountError={(event) => setStatus(event.message || 'Could not start camera.')}
                 />
+                <View pointerEvents="none" style={styles.faceGuideOverlay}>
+                  <View
+                    style={[
+                      styles.faceGuide,
+                      mode === 'attendance' &&
+                        verificationStage === 'matched' &&
+                        styles.faceGuideMatched,
+                    ]}
+                  >
+                    <View style={[styles.guideCorner, styles.guideTopLeft]} />
+                    <View style={[styles.guideCorner, styles.guideTopRight]} />
+                    <View style={[styles.guideCorner, styles.guideBottomLeft]} />
+                    <View style={[styles.guideCorner, styles.guideBottomRight]} />
+                  </View>
+                  <View style={styles.guidePrompt}>
+                    <Text style={styles.guidePromptText}>Fit your face inside the circle</Text>
+                  </View>
+                </View>
                 <View style={styles.cameraBadge}>
-                  <View style={[styles.dot, busy && styles.dotActive]} />
+                  {mode === 'attendance' && verificationStage === 'matched' ? (
+                    <ActivityIndicator size="small" color="#a9edbd" />
+                  ) : (
+                    <View style={[styles.dot, busy && styles.dotActive]} />
+                  )}
                   <Text style={styles.cameraBadgeText}>
                     {mode === 'register'
-                      ? `Registration ${progress}/${REQUIRED_SAMPLES}`
-                      : busy
-                        ? 'Checking face…'
-                        : 'Look at camera and blink'}
+                      ? `Saving face ${progress}/${REQUIRED_SAMPLES}`
+                      : verificationStage === 'matched'
+                        ? 'Face matched · Verifying blink'
+                        : 'Scanning for your face'}
                   </Text>
                 </View>
+                {mode === 'attendance' && verificationStage === 'matched' && (
+                  <View style={styles.blinkPrompt}>
+                    <ActivityIndicator color="#fff" size="small" />
+                    <Text style={styles.blinkPromptText}>Blink once to record attendance</Text>
+                  </View>
+                )}
                 <Pressable style={styles.cancelButton} onPress={onCancel}>
                   <Text style={styles.cancelButtonText}>Cancel</Text>
                 </Pressable>
@@ -574,18 +673,18 @@ function QuickAction({ label, mark, disabled = false, onPress }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#f5f8f5' },
+  screen: { flex: 1, backgroundColor: '#f0f5f1' },
   content: { paddingBottom: 34 },
   header: {
-    height: 330,
-    backgroundColor: '#075b3b',
-    paddingTop: 24,
+    height: 305,
+    backgroundColor: '#064f34',
+    paddingTop: 30,
     paddingHorizontal: 22,
     overflow: 'hidden',
   },
-  brandRow: { height: 112, justifyContent: 'center' },
-  brand: { color: '#fff', fontSize: 44, fontWeight: '900', letterSpacing: 1 },
-  brandTag: { color: '#a9e3b9', fontSize: 15, fontWeight: '700', letterSpacing: 5, marginLeft: 7 },
+  brandRow: { height: 96, justifyContent: 'center' },
+  brand: { color: '#fff', fontSize: 42, fontWeight: '900', letterSpacing: 1 },
+  brandTag: { color: '#b7ecc6', fontSize: 14, fontWeight: '700', letterSpacing: 5, marginLeft: 6 },
   welcomeBlock: { marginTop: 28 },
   welcome: { color: '#fff', fontSize: 19 },
   personName: { color: '#fff', fontSize: 25, fontWeight: '700', marginTop: 7 },
@@ -596,7 +695,7 @@ const styles = StyleSheet.create({
     borderRadius: 95,
     right: -88,
     bottom: -34,
-    backgroundColor: '#159451',
+    backgroundColor: '#13884c',
     borderWidth: 3,
     borderColor: '#b7ecc6',
     opacity: 0.85,
@@ -604,7 +703,7 @@ const styles = StyleSheet.create({
   attendanceCard: {
     marginTop: -38,
     marginHorizontal: 18,
-    backgroundColor: '#eaf6ed',
+    backgroundColor: '#fff',
     borderRadius: 20,
     minHeight: 310,
     paddingHorizontal: 20,
@@ -645,14 +744,51 @@ const styles = StyleSheet.create({
   timerValue: { color: '#fff', fontSize: 26, fontWeight: '700', lineHeight: 29 },
   timerUnit: { color: '#fff', fontSize: 10, marginBottom: 2 },
   cameraCard: {
-    height: 280,
+    height: 340,
     marginHorizontal: 18,
     marginTop: 78,
-    backgroundColor: '#18213a',
+    backgroundColor: '#10251a',
     borderRadius: 17,
     overflow: 'hidden',
   },
   camera: { width: '100%', height: '100%' },
+  faceGuideOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  faceGuide: {
+    width: 218,
+    height: 258,
+    borderRadius: 120,
+    borderWidth: 3,
+    borderColor: '#dcffe5',
+    backgroundColor: '#ffffff08',
+    shadowColor: '#35ef78',
+    shadowOpacity: 0.6,
+    shadowRadius: 11,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  faceGuideMatched: { borderColor: '#35ef78', borderWidth: 4 },
+  guideCorner: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    borderColor: '#50ee7f',
+  },
+  guideTopLeft: { top: -3, left: 18, borderTopWidth: 5, borderLeftWidth: 5, borderTopLeftRadius: 15 },
+  guideTopRight: { top: -3, right: 18, borderTopWidth: 5, borderRightWidth: 5, borderTopRightRadius: 15 },
+  guideBottomLeft: { bottom: -3, left: 18, borderBottomWidth: 5, borderLeftWidth: 5, borderBottomLeftRadius: 15 },
+  guideBottomRight: { bottom: -3, right: 18, borderBottomWidth: 5, borderRightWidth: 5, borderBottomRightRadius: 15 },
+  guidePrompt: {
+    position: 'absolute',
+    bottom: 62,
+    borderRadius: 18,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    backgroundColor: '#063c29dd',
+  },
+  guidePromptText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   cameraBadge: {
     position: 'absolute',
     left: 12,
@@ -660,7 +796,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-    backgroundColor: '#101322dd',
+    backgroundColor: '#063c29e8',
     borderRadius: 20,
     paddingVertical: 9,
     paddingHorizontal: 12,
@@ -668,6 +804,21 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#98a0ae' },
   dotActive: { backgroundColor: '#54dfa6' },
   cameraBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  blinkPrompt: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 63,
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#087344ee',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+  },
+  blinkPromptText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   cancelButton: {
     position: 'absolute',
     right: 12,
@@ -681,7 +832,7 @@ const styles = StyleSheet.create({
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 86,
+    marginTop: 84,
     marginHorizontal: 22,
     minHeight: 30,
     gap: 9,
@@ -764,5 +915,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   smallButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  footer: { color: '#858d98', textAlign: 'center', fontSize: 11, marginTop: 25, marginHorizontal: 20 },
+  footer: { color: '#738078', textAlign: 'center', fontSize: 11, marginTop: 25, marginHorizontal: 20 },
 });
