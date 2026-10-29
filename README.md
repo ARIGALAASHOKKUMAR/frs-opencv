@@ -63,13 +63,14 @@ npm install
 npm start
 ```
 
-Open the app using Expo Go on a phone or an iOS/Android simulator and enter
-the Render HTTPS URL and API access token.
+Open the app using Expo Go on a phone or an iOS/Android simulator. The Render
+API URL is prefilled; open **Server settings** if you need to change it.
 
-Tap **Connect**, allow camera permission, then register a face. Keep your face
-in the preview and move your head slightly while the app collects 30 samples.
-Choose **Clock in** or **Clock out**, look at the camera, and blink when the
-app indicates a face match.
+Tap **Connect**, allow camera permission, then register a face. Registration
+captures 8 samples, taking a few seconds; look at the camera and move your
+head slightly. When clocking in or out, look at the camera and blink after the
+app detects a face match. The app displays the recorded time, disables the
+completed action, enables the next action, and shows the shift duration.
 
 The Expo app is written in plain JavaScript (`App.jsx`), not TypeScript. The
 older command-line interface remains available:
@@ -80,7 +81,7 @@ older command-line interface remains available:
 python attendance.py register --name "Test User"
 ```
 
-Face the camera and move your head slightly while the app collects samples.
+Face the camera and move your head slightly while the app collects 8 samples.
 Press `q` to cancel. A new registration replaces the existing single-person
 profile.
 
@@ -109,8 +110,8 @@ python attendance.py attendance --action clock-in --threshold 60
 - `face_data/profile.json` — registered name
 - `face_data/attendance.csv` — clock-in/clock-out events and local timestamps
 
-No database is used. Keep the API token private, and remove the face model,
-profile, and attendance records when finished testing.
+No database is used. Keep the face model, profile, and attendance records
+private, and remove them when finished testing.
 This is a basic demo, not a production-grade identity or anti-spoofing system:
 Haar cascade eye detection can miss blinks or mistake eye occlusion for a blink,
 and a blink alone does not reliably prevent presentation attacks. Test under

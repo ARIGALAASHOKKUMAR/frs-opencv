@@ -70,6 +70,72 @@ class SessionRequest(BaseModel):
     session_id: str
 
 
+def attendance_summary(name):
+    matching_events = []
+
+    if ATTENDANCE_PATH.exists():
+        try:
+            with ATTENDANCE_PATH.open(newline="", encoding="utf-8") as file:
+                for event in csv.DictReader(file):
+                    if event.get("name") != name:
+                        continue
+                    try:
+                        timestamp = datetime.fromisoformat(event["timestamp"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    action = event.get("action", "")
+                    if action in ("clock-in", "clock-out"):
+                        matching_events.append(
+                            {
+                                "timestamp": timestamp.isoformat(timespec="seconds"),
+                                "name": name,
+                                "action": action,
+                            }
+                        )
+        except OSError as error:
+            raise HTTPException(
+                status_code=500, detail=f"Could not read attendance: {error}"
+            ) from error
+
+    clock_in_event = None
+    clock_out_event = None
+    for event in matching_events:
+        if event["action"] == "clock-in":
+            clock_in_event = event
+            clock_out_event = None
+        elif event["action"] == "clock-out":
+            clock_out_event = event
+
+    last_event = matching_events[-1] if matching_events else None
+    clocked_in = last_event is not None and last_event["action"] == "clock-in"
+    duration_minutes = 0
+    if clock_in_event:
+        end_time = (
+            datetime.now().astimezone()
+            if clocked_in
+            else datetime.fromisoformat(clock_out_event["timestamp"])
+            if clock_out_event
+            else datetime.fromisoformat(clock_in_event["timestamp"])
+        )
+        duration_minutes = max(
+            0,
+            int(
+                (
+                    end_time
+                    - datetime.fromisoformat(clock_in_event["timestamp"])
+                ).total_seconds()
+                // 60
+            ),
+        )
+
+    return {
+        "clocked_in": clocked_in,
+        "clock_in_time": clock_in_event["timestamp"] if clock_in_event else None,
+        "clock_out_time": clock_out_event["timestamp"] if clock_out_event else None,
+        "duration_minutes": duration_minutes,
+    }
+
+
 def get_cascades():
     global face_cascade, eye_cascade
     if face_cascade is None or eye_cascade is None:
@@ -133,7 +199,18 @@ def status():
                 status_code=500, detail=f"Could not read attendance: {error}"
             ) from error
 
-    return {"registered": name is not None, "name": name, "events": events}
+    summary = attendance_summary(name) if name else {
+        "clocked_in": False,
+        "clock_in_time": None,
+        "clock_out_time": None,
+        "duration_minutes": 0,
+    }
+    return {
+        "registered": name is not None,
+        "name": name,
+        "events": events,
+        **summary,
+    }
 
 
 @app.post("/api/register/start")
@@ -204,6 +281,16 @@ def start_attendance(request: AttendanceStart):
         name, recognizer = load_profile()
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    summary = attendance_summary(name)
+    if request.action == "clock-in" and summary["clocked_in"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Already clocked in at {summary['clock_in_time']}. Clock out first.",
+        )
+    if request.action == "clock-out" and not summary["clocked_in"]:
+        raise HTTPException(
+            status_code=409, detail="Clock in before trying to clock out."
+        )
     session_id = str(uuid.uuid4())
     with state_lock:
         attendance_sessions[session_id] = {
@@ -256,7 +343,7 @@ def attendance_frame(request: AttendanceFrame):
 
         eyes_open = eye_state(gray, rectangle, eyes)
         if eyes_open:
-            blink_seen = session["open_seen"] and session["closed_frames"] >= 2
+            blink_seen = session["open_seen"] and session["closed_frames"] >= 1
             session["open_seen"] = True
             session["closed_frames"] = 0
         else:
