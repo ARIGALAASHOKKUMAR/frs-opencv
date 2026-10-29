@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 
-const REQUIRED_SAMPLES = 8;
+const REQUIRED_SAMPLES = 5;
 const DEFAULT_API_URL = 'https://frs-opencv.onrender.com';
 
 async function requestApi(baseUrl, path, body) {
@@ -141,7 +141,7 @@ export default function App() {
 
   useEffect(() => {
     if (mode === 'idle' || !cameraReady) return undefined;
-    const interval = mode === 'register' ? 220 : 240;
+    const interval = mode === 'register' ? 160 : 120;
     const timer = setInterval(async () => {
       if (busyRef.current || !cameraRef.current) return;
       busyRef.current = true;
@@ -149,7 +149,7 @@ export default function App() {
       try {
         const photo = await cameraRef.current.takePictureAsync({
           base64: true,
-          quality: 0.3,
+          quality: 0.35,
           skipProcessing: true,
         });
         if (!photo?.base64) throw new Error('The camera did not return an image.');
@@ -311,7 +311,7 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <View style={styles.brandRow}>
-            <Text style={styles.brand}>APCFSS</Text>
+            <Text style={styles.brand}>APFD</Text>
             <Text style={styles.brandTag}>ATTENDANCE</Text>
           </View>
           <View style={styles.welcomeBlock}>
@@ -464,7 +464,7 @@ export default function App() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Register your face</Text>
             <Text style={styles.helpText}>
-              Registration now captures {REQUIRED_SAMPLES} samples. Face the camera and move slightly.
+              Registration captures {REQUIRED_SAMPLES} samples in a few seconds. Face the camera and move slightly.
             </Text>
             <TextInput
               value={name}
@@ -548,7 +548,9 @@ export default function App() {
           </View>
         )}
 
-        <Text style={styles.footer}>Face images are sent to your configured API server.</Text>
+        <Text style={styles.footer}>
+          Camera frames are sent only during registration or attendance verification.
+        </Text>
       </ScrollView>
     </View>
   );
@@ -572,18 +574,18 @@ function QuickAction({ label, mark, disabled = false, onPress }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#f8f8fa' },
+  screen: { flex: 1, backgroundColor: '#f5f8f5' },
   content: { paddingBottom: 34 },
   header: {
     height: 330,
-    backgroundColor: '#090978',
+    backgroundColor: '#075b3b',
     paddingTop: 24,
     paddingHorizontal: 22,
     overflow: 'hidden',
   },
   brandRow: { height: 112, justifyContent: 'center' },
-  brand: { color: '#fff', fontSize: 41, fontWeight: '900', letterSpacing: 0.5 },
-  brandTag: { color: '#12c4ed', fontSize: 17, fontWeight: '700', letterSpacing: 5, marginLeft: 90 },
+  brand: { color: '#fff', fontSize: 44, fontWeight: '900', letterSpacing: 1 },
+  brandTag: { color: '#a9e3b9', fontSize: 15, fontWeight: '700', letterSpacing: 5, marginLeft: 7 },
   welcomeBlock: { marginTop: 28 },
   welcome: { color: '#fff', fontSize: 19 },
   personName: { color: '#fff', fontSize: 25, fontWeight: '700', marginTop: 7 },
@@ -594,21 +596,21 @@ const styles = StyleSheet.create({
     borderRadius: 95,
     right: -88,
     bottom: -34,
-    backgroundColor: '#0870c5',
+    backgroundColor: '#159451',
     borderWidth: 3,
-    borderColor: '#8ecbff',
+    borderColor: '#b7ecc6',
     opacity: 0.85,
   },
   attendanceCard: {
     marginTop: -38,
     marginHorizontal: 18,
-    backgroundColor: '#eafcff',
+    backgroundColor: '#eaf6ed',
     borderRadius: 20,
     minHeight: 310,
     paddingHorizontal: 20,
     paddingTop: 24,
     paddingBottom: 82,
-    shadowColor: '#0b1560',
+    shadowColor: '#075b3b',
     shadowOpacity: 0.11,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 5 },
@@ -620,8 +622,8 @@ const styles = StyleSheet.create({
   actionDisabled: { color: '#7d858a' },
   actionTime: { color: '#303a43', fontSize: 14, fontWeight: '700', marginTop: 12 },
   actionHint: { color: '#89939c', fontSize: 11, marginTop: 5, textAlign: 'center' },
-  verticalRule: { width: 2, backgroundColor: '#d8e3e7', marginVertical: 8 },
-  progressRule: { height: 8, backgroundColor: '#ccd4d6', marginTop: 12, marginBottom: 21 },
+  verticalRule: { width: 2, backgroundColor: '#d7e5da', marginVertical: 8 },
+  progressRule: { height: 8, backgroundColor: '#cddbd0', marginTop: 12, marginBottom: 21 },
   shiftInfo: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 8 },
   shiftSide: { alignItems: 'center', minWidth: 90 },
   shiftLabel: { color: '#7c8b91', fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
@@ -634,7 +636,7 @@ const styles = StyleSheet.create({
     bottom: -56,
     left: '50%',
     marginLeft: -66,
-    backgroundColor: '#a00000',
+    backgroundColor: '#087344',
     borderColor: '#fff',
     borderWidth: 7,
     alignItems: 'center',
@@ -670,7 +672,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 12,
     bottom: 12,
-    backgroundColor: '#a00000',
+    backgroundColor: '#087344',
     borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -698,11 +700,11 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 38,
-    backgroundColor: '#10108b',
+    backgroundColor: '#087344',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  quickIconDisabled: { backgroundColor: '#9da2bd' },
+  quickIconDisabled: { backgroundColor: '#9eaca1' },
   quickIconText: { color: '#fff', fontSize: 17, fontWeight: '800' },
   quickLabel: { color: '#191b22', fontSize: 13, marginTop: 10 },
   quickLabelDisabled: { color: '#727780' },
@@ -718,7 +720,7 @@ const styles = StyleSheet.create({
   },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sectionTitle: { color: '#141722', fontSize: 17, fontWeight: '700' },
-  linkText: { color: '#10108b', fontSize: 13, fontWeight: '700' },
+  linkText: { color: '#087344', fontSize: 13, fontWeight: '700' },
   helpText: { color: '#687280', fontSize: 13, lineHeight: 19 },
   eventRow: {
     flexDirection: 'row',
@@ -730,7 +732,7 @@ const styles = StyleSheet.create({
   },
   eventName: { color: '#222735', fontSize: 14, fontWeight: '700' },
   eventTime: { color: '#798391', fontSize: 12, marginTop: 4 },
-  eventAction: { color: '#10108b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase' },
+  eventAction: { color: '#087344', fontSize: 12, fontWeight: '800', textTransform: 'uppercase' },
   input: {
     minHeight: 46,
     color: '#212633',
@@ -744,7 +746,7 @@ const styles = StyleSheet.create({
   registerButton: {
     minHeight: 48,
     borderRadius: 11,
-    backgroundColor: '#10108b',
+    backgroundColor: '#087344',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
@@ -755,7 +757,7 @@ const styles = StyleSheet.create({
   settingsToggle: { alignSelf: 'center', marginTop: 24, padding: 8 },
   urlRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   smallButton: {
-    backgroundColor: '#10108b',
+    backgroundColor: '#087344',
     minHeight: 46,
     borderRadius: 10,
     paddingHorizontal: 14,

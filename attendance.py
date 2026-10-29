@@ -22,7 +22,7 @@ ATTENDANCE_PATH = DATA_DIR / "attendance.csv"
 FACE_CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 EYE_CASCADE_PATH = cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml"
 FACE_SIZE = (200, 200)
-REGISTRATION_SAMPLES = 8
+REGISTRATION_SAMPLES = 5
 
 
 def load_cascades():

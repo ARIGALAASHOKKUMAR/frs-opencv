@@ -67,7 +67,7 @@ Open the app using Expo Go on a phone or an iOS/Android simulator. The Render
 API URL is prefilled; open **Server settings** if you need to change it.
 
 Tap **Connect**, allow camera permission, then register a face. Registration
-captures 8 samples, taking a few seconds; look at the camera and move your
+captures 5 samples, taking a few seconds; look at the camera and move your
 head slightly. When clocking in or out, look at the camera and blink after the
 app detects a face match. The app displays the recorded time, disables the
 completed action, enables the next action, and shows the shift duration.
@@ -81,7 +81,7 @@ older command-line interface remains available:
 python attendance.py register --name "Test User"
 ```
 
-Face the camera and move your head slightly while the app collects 8 samples.
+Face the camera and move your head slightly while the app collects 5 samples.
 Press `q` to cancel. A new registration replaces the existing single-person
 profile.
 
