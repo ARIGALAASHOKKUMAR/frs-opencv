@@ -73,6 +73,10 @@ is cancelled. When clocking in or out, the app checks frames only during the
 active action, shows a verification spinner after a face match, and requires a
 blink to record attendance. It then displays the recorded time, disables the
 completed action, enables the next action, and shows the shift duration.
+Attendance uses the camera's smallest available picture size of at least
+640 pixels wide, sends lower-quality frames, and stops capturing as soon as
+the blink is verified. The camera preview is displayed in a green circular
+frame.
 
 The Expo app is written in plain JavaScript (`App.jsx`), not TypeScript. The
 older command-line interface remains available:

@@ -299,7 +299,6 @@ def start_attendance(request: AttendanceStart):
             "recognizer": recognizer,
             "open_seen": False,
             "closed_frames": 0,
-            "match_frames": 0,
         }
     return {"session_id": session_id, "name": name, "status": "waiting_for_face"}
 
@@ -314,12 +313,10 @@ def attendance_frame(request: AttendanceFrame):
             raise HTTPException(status_code=404, detail="Attendance session not found.")
         detected = detect_faces(gray, faces)
         if len(detected) == 0:
-            session["match_frames"] = 0
             session["open_seen"] = False
             session["closed_frames"] = 0
             return {"status": "face_not_found", "message": "Face not found"}
         if len(detected) > 1:
-            session["match_frames"] = 0
             session["open_seen"] = False
             session["closed_frames"] = 0
             return {
@@ -332,14 +329,9 @@ def attendance_frame(request: AttendanceFrame):
             normalized_face(gray, rectangle)
         )
         if prediction != 0 or confidence > MATCH_THRESHOLD:
-            session["match_frames"] = 0
             session["open_seen"] = False
             session["closed_frames"] = 0
             return {"status": "not_matched", "message": "Face not matched"}
-
-        session["match_frames"] += 1
-        if session["match_frames"] < 3:
-            return {"status": "matched", "message": "Face matched"}
 
         eyes_open = eye_state(gray, rectangle, eyes)
         if eyes_open:

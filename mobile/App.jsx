@@ -88,6 +88,7 @@ export default function App() {
   const [showRegistration, setShowRegistration] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [verificationStage, setVerificationStage] = useState('scanning');
+  const [pictureSize, setPictureSize] = useState();
   const [now, setNow] = useState(Date.now());
   const cameraRef = useRef(null);
   const modeRef = useRef({ type: 'idle', sessionId: null });
@@ -190,9 +191,29 @@ export default function App() {
     }
   }, [apiUrl, restoreScreenBrightness]);
 
+  const handleCameraReady = async () => {
+    try {
+      const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
+      const target = (sizes || [])
+        .map((size) => {
+          const match = size.match(/^(\d+)x(\d+)$/);
+          return match
+            ? { size, width: Number(match[1]), height: Number(match[2]) }
+            : null;
+        })
+        .filter((size) => size && size.width >= 640 && size.height >= 360)
+        .sort((a, b) => a.width * a.height - b.width * b.height)[0];
+      if (target) setPictureSize(target.size);
+    } catch (error) {
+      setStatus(`Using the camera's default picture size: ${error.message}`);
+    } finally {
+      setCameraReady(true);
+    }
+  };
+
   useEffect(() => {
     if (mode === 'idle' || !cameraReady) return undefined;
-    const interval = mode === 'register' ? 160 : 220;
+    const interval = mode === 'register' ? 160 : 100;
     const timer = setInterval(async () => {
       if (busyRef.current || !cameraRef.current) return;
       busyRef.current = true;
@@ -200,7 +221,7 @@ export default function App() {
       try {
         const photo = await cameraRef.current.takePictureAsync({
           base64: true,
-          quality: 0.35,
+          quality: 0.25,
           skipProcessing: true,
         });
         if (!photo?.base64) throw new Error('The camera did not return an image.');
@@ -455,7 +476,8 @@ export default function App() {
                   ref={cameraRef}
                   style={styles.camera}
                   facing="front"
-                  onCameraReady={() => setCameraReady(true)}
+                  pictureSize={pictureSize}
+                  onCameraReady={handleCameraReady}
                   onMountError={(event) => setStatus(event.message || 'Could not start camera.')}
                 />
                 <View pointerEvents="none" style={styles.faceGuideOverlay}>
@@ -744,12 +766,15 @@ const styles = StyleSheet.create({
   timerValue: { color: '#fff', fontSize: 26, fontWeight: '700', lineHeight: 29 },
   timerUnit: { color: '#fff', fontSize: 10, marginBottom: 2 },
   cameraCard: {
-    height: 340,
-    marginHorizontal: 18,
+    width: '86%',
+    aspectRatio: 1,
+    alignSelf: 'center',
     marginTop: 78,
     backgroundColor: '#10251a',
-    borderRadius: 17,
+    borderRadius: 220,
     overflow: 'hidden',
+    borderColor: '#087344',
+    borderWidth: 5,
   },
   camera: { width: '100%', height: '100%' },
   faceGuideOverlay: {
@@ -758,9 +783,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   faceGuide: {
-    width: 218,
-    height: 258,
-    borderRadius: 120,
+    width: 236,
+    height: 236,
+    borderRadius: 118,
     borderWidth: 3,
     borderColor: '#dcffe5',
     backgroundColor: '#ffffff08',
