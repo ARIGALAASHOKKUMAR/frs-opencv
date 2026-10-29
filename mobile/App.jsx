@@ -47,7 +47,7 @@ async function requestApi(baseUrl, accessToken, path, body) {
 
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
-  const [apiUrl, setApiUrl] = useState('');
+  const [apiUrl, setApiUrl] = useState('https://frs-opencv.onrender.com');
   const [accessToken, setAccessToken] = useState('');
   const [name, setName] = useState('');
   const [profile, setProfile] = useState(null);
