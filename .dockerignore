@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.env.*
+.expo
+mobile
+node_modules
+__pycache__
+*.py[cod]
+face_data
+.DS_Store

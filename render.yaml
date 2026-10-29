@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: face-attendance-api
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      name: face-attendance-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: FACE_DATA_DIR
+        value: /var/data/face_data
+      - key: API_ACCESS_TOKEN
+        sync: false
