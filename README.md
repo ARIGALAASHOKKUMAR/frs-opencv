@@ -1,124 +1,94 @@
-# OpenCV face attendance demo
+# APFD face attendance
 
-A local-only face attendance demo with a React Native Expo app and a Python
-OpenCV API. It supports one registered face, and requires a matching face and
-blink before clock-in or clock-out is written to a CSV file.
+A React Native Expo app and Python FastAPI service for employee accounts,
+single-face registration, and blink-confirmed clock-in/out. Supabase provides
+email/password authentication and stores each employee profile, face model, and
+attendance events. OpenCV performs face matching in the API.
 
-## Requirements
+## Configure Supabase
 
-- Python 3.9 or newer
-- A webcam
-- Camera permission for your terminal or Python application
+1. In Supabase, open **SQL Editor**, paste and run [`supabase/schema.sql`](./supabase/schema.sql).
+   The tables use row-level security so a signed-in employee can access only
+   their own profile and attendance records.
+2. In **Authentication → Providers**, enable Email. Supabase email confirmation
+   may be left on; employees then need to confirm their address before signing
+   in. For local testing only, email confirmation can be disabled in the Auth
+   settings.
+3. Use the project's **publishable** key in the app and API. Do not use the
+   PostgreSQL connection string or a service-role/secret key.
 
-Install the Python dependencies:
+The face model is biometric data. This demo stores it in the employee's
+row-protected `employee_profiles.face_model` column. Use test data and restrict
+access to your Supabase project.
 
-```bash
-python -m pip install -r requirements.txt
-```
-
-`opencv-contrib-python` is pinned to a release that includes the Haar cascade
-files used for face and eye detection. LBPH is part of OpenCV's contrib
-modules. Do not install `opencv-python` alongside it in the same environment.
-
-## Deploy the API to Render
-
-This demo can be deployed on Render. The face model, profile, and CSV are stored
-on a Render persistent disk. The persistent disk requires a paid Render web
-service plan. The API is publicly accessible without authentication; anyone
-who knows the service URL can register a replacement face or access attendance
-records. Only use it with test data you are comfortable exposing.
-
-1. Push this project to a Git provider that Render can access.
-2. In Render, choose **New → Blueprint**, select the repository, and deploy
-   `render.yaml` from the project root.
-3. After the service is live, copy its HTTPS URL, such as
-   `https://face-attendance-api.onrender.com`.
-4. In the Expo app, enter that URL and tap **Connect**.
-
-The app sends camera images to the deployed service for recognition. The
-registered face model, profile, and attendance CSV are stored on its persistent
-disk. There is no API access control; do not use real or sensitive data or
-distribute this configuration for production use.
-
-## Run the API locally
-
-Start the API locally:
-
-```bash
-python -m uvicorn api:app --host 0.0.0.0 --port 8000
-```
-
-On a physical phone, use
-`http://<your-computer-LAN-IP>:8000`; on Android emulator use
-`http://10.0.2.2:8000`; on iOS simulator use `http://127.0.0.1:8000`.
-For a physical phone, confirm the URL loads from the phone's browser, use the
-computer's Wi-Fi IP (not `127.0.0.1`), and check that the computer firewall
-allows port 8000.
-
-## Start the Expo app
+## Configure the Expo app
 
 ```bash
 cd mobile
+cp .env.example .env
+```
+
+Set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in
+`mobile/.env` to the Supabase project URL and publishable key. This file is
+git-ignored. Restart Expo after changing environment variables:
+
+```bash
 npm install
 npm start
 ```
 
-Open the app using Expo Go on a phone or an iOS/Android simulator. The Render
-API URL is prefilled; open **Server settings** if you need to change it.
+The sign-up form creates an account with full name, employee ID, email, and
+password. Passwords are handled only by Supabase Auth. After signing in, open
+**Profile → Register Face** and follow the camera instructions. Each account
+has its own face model and attendance history.
 
-Tap **Connect**, allow camera permission, then register a face. Registration
-temporarily raises the screen brightness and captures 5 samples while showing
-a face-position guide; brightness is restored when registration finishes or
-is cancelled. When clocking in or out, the app checks frames only during the
-active action, shows a verification spinner after a face match, and requires a
-blink to record attendance. It then displays the recorded time, disables the
-completed action, enables the next action, and shows the shift duration.
-Attendance uses the camera's smallest available picture size of at least
-640 pixels wide, sends lower-quality frames, and stops capturing as soon as
-the blink is verified. The camera preview is displayed in a green circular
-frame.
+This learning setup allows public self-registration; it does not check the
+employee ID against an official staff list or require an administrator invite.
+Do not treat an account or face match as proof of employment.
+Existing local CSV attendance and face files are not automatically imported;
+new accounts must enroll their face again.
 
-The Expo app is written in plain JavaScript (`App.jsx`), not TypeScript. The
-older command-line interface remains available:
+## Deploy the API to Render
 
-## Register one person from the command line
+Deploy the repository using the included `render.yaml` Blueprint. In the
+Render service's environment settings, add:
 
-```bash
-python attendance.py register --name "Test User"
-```
+- `SUPABASE_URL` — your Supabase project URL
+- `SUPABASE_PUBLISHABLE_KEY` — your Supabase publishable key
 
-Face the camera and move your head slightly while the app collects 5 samples.
-Press `q` to cancel. A new registration replaces the existing single-person
-profile.
+The Blueprint preconfigures the project URL and prompts for the publishable
+key. Never add a PostgreSQL password, service-role key, or other secret to the
+Expo app, source control, or a public setting.
 
-## Record attendance
+In the Expo app, the default attendance API is
+`https://frs-opencv.onrender.com`; change it under **Profile → Settings** if
+your Render URL is different. The API accepts only valid Supabase access
+tokens. It uses each employee's token for database requests, and Supabase RLS
+enforces user ownership without a service-role key.
 
-```bash
-python attendance.py attendance --action clock-in
-python attendance.py attendance --action clock-out
-```
+## Run the API locally
 
-The app waits for one matching face and a blink. A different face shows
-`Face not matched` and does not create an attendance record. Press `q` to
-cancel. If the camera is not the default camera, pass `--camera 1` (or another
-camera index).
-
-The LBPH confidence threshold defaults to `70`; lower values are stricter.
-Adjust it with `--threshold`, for example:
+Set the same two Supabase environment variables in the terminal, then run:
 
 ```bash
-python attendance.py attendance --action clock-in --threshold 60
+python -m pip install -r requirements.txt
+python -m uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-## Local files
+For a physical phone, set the API URL in **Profile → Settings** to
+`http://<your-computer-LAN-IP>:8000`. Ensure the phone and computer share a
+network and the computer firewall allows port 8000. Android emulator uses
+`http://10.0.2.2:8000`; iOS simulator uses `http://127.0.0.1:8000`.
 
-- `face_data/face_model.yml` — registered face model
-- `face_data/profile.json` — registered name
-- `face_data/attendance.csv` — clock-in/clock-out events and local timestamps
+## Attendance and face registration
 
-No database is used. Keep the face model, profile, and attendance records
-private, and remove them when finished testing.
-This is a basic demo, not a production-grade identity or anti-spoofing system:
-Haar cascade eye detection can miss blinks or mistake eye occlusion for a blink,
-and a blink alone does not reliably prevent presentation attacks. Test under
-your camera and lighting conditions before relying on its results.
+Registration captures 5 samples. Clock-in/out requires a matching face and an
+open-eye → closed-eye → open-eye blink sequence. Temporary camera frames are
+processed by the API and are not stored. The final face model and attendance
+event are stored in Supabase; the API scales larger images down before face
+detection.
+
+This is a learning demo, not a production-grade identity or anti-spoofing
+system. Haar eye detection can miss blinks or mistake eye occlusion for a blink,
+and a blink alone does not reliably prevent presentation attacks. Review
+privacy, consent, employee access, and retention requirements before real use.

@@ -12,3 +12,4 @@ mobile/dist/
 mobile/web-build/
 mobile/.env
 mobile/.env.*
+!mobile/.env.example

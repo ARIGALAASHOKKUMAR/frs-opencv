@@ -11,3 +11,7 @@ services:
     envVars:
       - key: FACE_DATA_DIR
         value: /var/data/face_data
+      - key: SUPABASE_URL
+        value: https://rhaaeqzjdxqorvorpvxm.supabase.co
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false

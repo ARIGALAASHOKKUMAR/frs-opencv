@@ -1,38 +1,37 @@
 #!/usr/bin/env python3
-"""Local HTTP API for the Expo face-attendance app."""
+"""Supabase-authenticated OpenCV face attendance API."""
 
 import base64
 import binascii
-import csv
+import hashlib
 import json
 import os
+import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Literal
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from attendance import (
-    ATTENDANCE_PATH,
-    DATA_DIR,
-    FACE_SIZE,
-    MODEL_PATH,
-    PROFILE_PATH,
     REGISTRATION_SAMPLES,
     detect_faces,
     eye_state,
     load_cascades,
-    load_profile,
     normalized_face,
 )
 
 
-app = FastAPI(title="Face Attendance API")
+app = FastAPI(title="APFD Face Attendance API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,17 +39,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_PUBLISHABLE_KEY = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")
 MAX_IMAGE_BYTES = 5_000_000
+MAX_PROCESSING_WIDTH = 640
 MATCH_THRESHOLD = 70.0
+AUTH_CACHE_SECONDS = 60
 state_lock = threading.Lock()
+auth_cache_lock = threading.Lock()
 face_cascade = None
 eye_cascade = None
-registration = None
+registrations = {}
 attendance_sessions = {}
+verified_tokens = {}
 
 
 class RegisterStart(BaseModel):
     name: str
+    employee_id: str
 
 
 class ImageFrame(BaseModel):
@@ -70,64 +76,188 @@ class SessionRequest(BaseModel):
     session_id: str
 
 
-def attendance_summary(name):
-    matching_events = []
+def require_supabase_config():
+    if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase is not configured. Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.",
+        )
 
-    if ATTENDANCE_PATH.exists():
+
+def supabase_request(method, path, user=None, payload=None, params=None, prefer=None):
+    require_supabase_config()
+    url = f"{SUPABASE_URL}{path}"
+    if params:
+        url = f"{url}?{urlencode(params, doseq=True)}"
+    headers = {
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
+        "Accept": "application/json",
+    }
+    if user:
+        headers["Authorization"] = f"Bearer {user['token']}"
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    if prefer:
+        headers["Prefer"] = prefer
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = Request(url, data=body, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=12) as response:
+            response_body = response.read()
+    except HTTPError as error:
+        detail = "Supabase rejected the request."
         try:
-            with ATTENDANCE_PATH.open(newline="", encoding="utf-8") as file:
-                for event in csv.DictReader(file):
-                    if event.get("name") != name:
-                        continue
-                    try:
-                        timestamp = datetime.fromisoformat(event["timestamp"])
-                    except (KeyError, TypeError, ValueError):
-                        continue
-                    action = event.get("action", "")
-                    if action in ("clock-in", "clock-out"):
-                        matching_events.append(
-                            {
-                                "timestamp": timestamp.isoformat(timespec="seconds"),
-                                "name": name,
-                                "action": action,
-                            }
-                        )
-        except OSError as error:
+            error_body = json.loads(error.read().decode("utf-8"))
+            detail = (
+                error_body.get("message")
+                or error_body.get("msg")
+                or error_body.get("error_description")
+                or detail
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        if error.code == 401:
+            raise HTTPException(status_code=401, detail="Your session expired. Sign in again.") from error
+        if error.code == 403:
             raise HTTPException(
-                status_code=500, detail=f"Could not read attendance: {error}"
+                status_code=403,
+                detail="Supabase denied access. Check the database schema and row-level security policies.",
             ) from error
+        if error.code == 409 or "duplicate key" in detail.lower():
+            raise HTTPException(status_code=409, detail=detail) from error
+        if 400 <= error.code < 500:
+            raise HTTPException(status_code=400, detail=detail) from error
+        raise HTTPException(
+            status_code=502, detail="Supabase could not complete the database request."
+        ) from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise HTTPException(
+            status_code=503, detail="Could not connect to Supabase. Try again."
+        ) from error
+    if not response_body:
+        return None
+    try:
+        return json.loads(response_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=502, detail="Supabase returned an invalid response."
+        ) from error
 
+
+def authenticate(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Sign in to continue.")
+    require_supabase_config()
+    token = authorization[7:].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Sign in to continue.")
+
+    cache_key = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = time.monotonic()
+    with auth_cache_lock:
+        cached = verified_tokens.get(cache_key)
+        if cached and cached["expires_at"] > now:
+            return {**cached["user"], "token": token}
+        expired_keys = [
+            key for key, value in verified_tokens.items() if value["expires_at"] <= now
+        ]
+        for key in expired_keys:
+            verified_tokens.pop(key, None)
+
+    request = Request(
+        f"{SUPABASE_URL}/auth/v1/user",
+        headers={
+            "apikey": SUPABASE_PUBLISHABLE_KEY,
+            "Authorization": f"Bearer {token}",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=8) as response:
+            user = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        if error.code in (401, 403):
+            raise HTTPException(status_code=401, detail="Your session expired. Sign in again.") from error
+        raise HTTPException(status_code=503, detail="Could not verify your Supabase session.") from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise HTTPException(status_code=503, detail="Could not connect to Supabase Auth.") from error
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=502, detail="Supabase Auth returned an invalid response.") from error
+
+    user_id = user.get("id")
+    if not isinstance(user_id, str):
+        raise HTTPException(status_code=401, detail="Supabase returned an invalid user session.")
+    safe_user = {
+        "id": user_id,
+        "email": user.get("email", ""),
+        "user_metadata": user.get("user_metadata") or {},
+    }
+    with auth_cache_lock:
+        if len(verified_tokens) >= 2048:
+            verified_tokens.clear()
+        verified_tokens[cache_key] = {
+            "user": safe_user,
+            "expires_at": now + AUTH_CACHE_SECONDS,
+        }
+    return {**safe_user, "token": token}
+
+
+def db_rows(path, user, params):
+    result = supabase_request("GET", path, user=user, params=params)
+    if not isinstance(result, list):
+        raise HTTPException(status_code=502, detail="Supabase returned invalid table data.")
+    return result
+
+
+def get_profile(user, include_model=False):
+    fields = "user_id,employee_id,full_name,face_model" if include_model else "user_id,employee_id,full_name"
+    rows = db_rows(
+        "/rest/v1/employee_profiles",
+        user,
+        {"select": fields, "user_id": f"eq.{user['id']}", "limit": "1"},
+    )
+    return rows[0] if rows else None
+
+
+def get_events(user, limit=100):
+    return db_rows(
+        "/rest/v1/attendance_events",
+        user,
+        {
+            "select": "id,timestamp,name,action",
+            "user_id": f"eq.{user['id']}",
+            "order": "timestamp.desc",
+            "limit": str(limit),
+        },
+    )
+
+
+def attendance_summary(events):
+    ordered = sorted(events, key=lambda event: event["timestamp"])
     clock_in_event = None
     clock_out_event = None
-    for event in matching_events:
+    for event in ordered:
         if event["action"] == "clock-in":
             clock_in_event = event
             clock_out_event = None
         elif event["action"] == "clock-out":
             clock_out_event = event
 
-    last_event = matching_events[-1] if matching_events else None
+    last_event = ordered[-1] if ordered else None
     clocked_in = last_event is not None and last_event["action"] == "clock-in"
     duration_minutes = 0
     if clock_in_event:
+        start_time = datetime.fromisoformat(clock_in_event["timestamp"])
         end_time = (
             datetime.now().astimezone()
             if clocked_in
             else datetime.fromisoformat(clock_out_event["timestamp"])
             if clock_out_event
-            else datetime.fromisoformat(clock_in_event["timestamp"])
+            else start_time
         )
         duration_minutes = max(
-            0,
-            int(
-                (
-                    end_time
-                    - datetime.fromisoformat(clock_in_event["timestamp"])
-                ).total_seconds()
-                // 60
-            ),
+            0, int((end_time - start_time).total_seconds() // 60)
         )
-
     return {
         "clocked_in": clocked_in,
         "clock_in_time": clock_in_event["timestamp"] if clock_in_event else None,
@@ -161,13 +291,59 @@ def decode_frame(encoded_image):
         raise HTTPException(status_code=400, detail="Could not decode the image.")
     if image.shape[0] * image.shape[1] > 12_000_000:
         raise HTTPException(status_code=413, detail="Image dimensions are too large.")
-    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if gray.shape[1] > MAX_PROCESSING_WIDTH:
+        scale = MAX_PROCESSING_WIDTH / gray.shape[1]
+        gray = cv2.resize(
+            gray,
+            (MAX_PROCESSING_WIDTH, round(gray.shape[0] * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+    return gray
+
+
+def load_recognizer(model_data):
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".yml", delete=False
+        ) as model_file:
+            model_file.write(model_data)
+            path = model_file.name
+        recognizer = cv2.face.LBPHFaceRecognizer_create()
+        recognizer.read(path)
+        return recognizer
+    except (OSError, cv2.error) as error:
+        raise HTTPException(
+            status_code=500, detail="Could not load your registered face model."
+        ) from error
+    finally:
+        if path and os.path.exists(path):
+            os.unlink(path)
+
+
+def serialize_recognizer(recognizer):
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".yml", delete=False) as model_file:
+            path = model_file.name
+        recognizer.write(path)
+        with open(path, encoding="utf-8") as model_file:
+            return model_file.read()
+    except (OSError, cv2.error) as error:
+        raise HTTPException(
+            status_code=500, detail="Could not save your registered face model."
+        ) from error
+    finally:
+        if path and os.path.exists(path):
+            os.unlink(path)
 
 
 @app.get("/health")
 def health():
     try:
         get_cascades()
+        require_supabase_config()
     except RuntimeError as error:
         raise HTTPException(
             status_code=503, detail=f"OpenCV face-recognition setup failed: {error}"
@@ -176,59 +352,43 @@ def health():
 
 
 @app.get("/api/status")
-def status():
-    name = None
-    if MODEL_PATH.is_file() and PROFILE_PATH.is_file():
-        try:
-            profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
-            if not isinstance(profile, dict) or not isinstance(profile.get("name"), str):
-                raise ValueError("The registered profile is invalid.")
-            name = profile["name"]
-        except (OSError, json.JSONDecodeError):
-            raise HTTPException(status_code=500, detail="Could not read the profile.")
-        except ValueError as error:
-            raise HTTPException(status_code=500, detail=str(error)) from error
-
-    events = []
-    if ATTENDANCE_PATH.is_file():
-        try:
-            with ATTENDANCE_PATH.open(newline="", encoding="utf-8") as file:
-                events = list(csv.DictReader(file))[-10:][::-1]
-        except OSError as error:
-            raise HTTPException(
-                status_code=500, detail=f"Could not read attendance: {error}"
-            ) from error
-
-    summary = attendance_summary(name) if name else {
-        "clocked_in": False,
-        "clock_in_time": None,
-        "clock_out_time": None,
-        "duration_minutes": 0,
-    }
+def status(authorization: str | None = Header(default=None)):
+    current_user = authenticate(authorization)
+    profile = get_profile(current_user)
+    metadata = current_user.get("user_metadata") or {}
+    events = get_events(current_user)
+    summary = attendance_summary(events)
     return {
-        "registered": name is not None,
-        "name": name,
-        "events": events,
+        "registered": bool(profile and profile.get("face_model")),
+        "name": profile["full_name"] if profile else metadata.get("full_name"),
+        "employee_id": profile["employee_id"] if profile else metadata.get("employee_id"),
+        "email": current_user["email"],
+        "events": events[:10],
         **summary,
     }
 
 
 @app.post("/api/register/start")
-def start_registration(request: RegisterStart):
+def start_registration(request: RegisterStart, authorization: str | None = Header(default=None)):
+    user = authenticate(authorization)
     name = request.name.strip()
+    employee_id = request.employee_id.strip()
     if not name or len(name) > 100:
-        raise HTTPException(
-            status_code=400, detail="Enter a name between 1 and 100 characters."
-        )
+        raise HTTPException(status_code=400, detail="Enter a name between 1 and 100 characters.")
+    if not employee_id or len(employee_id) > 64:
+        raise HTTPException(status_code=400, detail="Enter a valid employee ID.")
     with state_lock:
-        global registration
-        registration = {"name": name, "samples": []}
+        registrations[user["id"]] = {
+            "name": name,
+            "employee_id": employee_id,
+            "samples": [],
+        }
     return {"status": "capturing", "required": REGISTRATION_SAMPLES, "collected": 0}
 
 
 @app.post("/api/register/frame")
-def register_frame(request: ImageFrame):
-    global registration
+def register_frame(request: ImageFrame, authorization: str | None = Header(default=None)):
+    user = authenticate(authorization)
     gray = decode_frame(request.image)
     faces, _ = get_cascades()
     detected = detect_faces(gray, faces)
@@ -239,6 +399,7 @@ def register_frame(request: ImageFrame):
 
     face = normalized_face(gray, tuple(int(value) for value in detected[0]))
     with state_lock:
+        registration = registrations.get(user["id"])
         if registration is None:
             raise HTTPException(status_code=409, detail="Start registration first.")
         registration["samples"].append(face)
@@ -250,66 +411,82 @@ def register_frame(request: ImageFrame):
                 "collected": collected,
             }
 
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
         recognizer = cv2.face.LBPHFaceRecognizer_create()
         recognizer.train(
             registration["samples"],
             np.zeros(REGISTRATION_SAMPLES, dtype=np.int32),
         )
-        recognizer.write(str(MODEL_PATH))
-        PROFILE_PATH.write_text(
-            json.dumps({"name": registration["name"]}, indent=2) + "\n",
-            encoding="utf-8",
+        model_data = serialize_recognizer(recognizer)
+        supabase_request(
+            "POST",
+            "/rest/v1/employee_profiles",
+            user=user,
+            params={"on_conflict": "user_id"},
+            payload={
+                "user_id": user["id"],
+                "employee_id": registration["employee_id"],
+                "full_name": registration["name"],
+                "face_model": model_data,
+            },
+            prefer="resolution=merge-duplicates,return=representation",
         )
         name = registration["name"]
-        registration = None
+        registrations.pop(user["id"], None)
 
     return {"status": "registered", "name": name, "collected": collected}
 
 
 @app.post("/api/register/cancel")
-def cancel_registration():
-    global registration
+def cancel_registration(authorization: str | None = Header(default=None)):
+    user = authenticate(authorization)
     with state_lock:
-        registration = None
+        registrations.pop(user["id"], None)
     return {"status": "cancelled"}
 
 
 @app.post("/api/attendance/start")
-def start_attendance(request: AttendanceStart):
-    try:
-        name, recognizer = load_profile()
-    except RuntimeError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    summary = attendance_summary(name)
+def start_attendance(
+    request: AttendanceStart, authorization: str | None = Header(default=None)
+):
+    user = authenticate(authorization)
+    profile = get_profile(user, include_model=True)
+    if not profile or not profile.get("face_model"):
+        raise HTTPException(
+            status_code=409, detail="Register your face before recording attendance."
+        )
+    events = get_events(user)
+    summary = attendance_summary(events)
     if request.action == "clock-in" and summary["clocked_in"]:
         raise HTTPException(
             status_code=409,
             detail=f"Already clocked in at {summary['clock_in_time']}. Clock out first.",
         )
     if request.action == "clock-out" and not summary["clocked_in"]:
-        raise HTTPException(
-            status_code=409, detail="Clock in before trying to clock out."
-        )
+        raise HTTPException(status_code=409, detail="Clock in before trying to clock out.")
     session_id = str(uuid.uuid4())
     with state_lock:
         attendance_sessions[session_id] = {
+            "user_id": user["id"],
+            "token": user["token"],
             "action": request.action,
-            "name": name,
-            "recognizer": recognizer,
+            "name": profile["full_name"],
+            "recognizer": load_recognizer(profile["face_model"]),
             "open_seen": False,
             "closed_frames": 0,
         }
-    return {"session_id": session_id, "name": name, "status": "waiting_for_face"}
+    return {"session_id": session_id, "name": profile["full_name"], "status": "waiting_for_face"}
 
 
 @app.post("/api/attendance/frame")
-def attendance_frame(request: AttendanceFrame):
+def attendance_frame(
+    request: AttendanceFrame, authorization: str | None = Header(default=None)
+):
+    user = authenticate(authorization)
     gray = decode_frame(request.image)
     faces, eyes = get_cascades()
     with state_lock:
         session = attendance_sessions.get(request.session_id)
-        if session is None:
+        if session is None or session["user_id"] != user["id"]:
             raise HTTPException(status_code=404, detail="Attendance session not found.")
         detected = detect_faces(gray, faces)
         if len(detected) == 0:
@@ -350,13 +527,18 @@ def attendance_frame(request: AttendanceFrame):
             }
 
         timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
-        is_new_file = not ATTENDANCE_PATH.exists()
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with ATTENDANCE_PATH.open("a", newline="", encoding="utf-8") as file:
-            writer = csv.writer(file)
-            if is_new_file:
-                writer.writerow(["timestamp", "name", "action"])
-            writer.writerow([timestamp, session["name"], session["action"]])
+        supabase_request(
+            "POST",
+            "/rest/v1/attendance_events",
+            user={"id": user["id"], "token": session["token"]},
+            payload={
+                "user_id": user["id"],
+                "name": session["name"],
+                "action": session["action"],
+                "timestamp": timestamp,
+            },
+            prefer="return=minimal",
+        )
         attendance_sessions.pop(request.session_id)
         return {
             "status": "recorded",
@@ -368,7 +550,12 @@ def attendance_frame(request: AttendanceFrame):
 
 
 @app.post("/api/attendance/cancel")
-def cancel_attendance(request: SessionRequest):
+def cancel_attendance(
+    request: SessionRequest, authorization: str | None = Header(default=None)
+):
+    user = authenticate(authorization)
     with state_lock:
-        attendance_sessions.pop(request.session_id, None)
+        session = attendance_sessions.get(request.session_id)
+        if session and session["user_id"] == user["id"]:
+            attendance_sessions.pop(request.session_id, None)
     return {"status": "cancelled"}

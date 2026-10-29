@@ -51,7 +51,7 @@ def open_camera(camera_index):
 
 def detect_faces(gray, cascade):
     return cascade.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(100, 100)
+        gray, scaleFactor=1.15, minNeighbors=5, minSize=(100, 100)
     )
 
 
