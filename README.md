@@ -16,9 +16,9 @@ Install the Python dependencies:
 python -m pip install -r requirements.txt
 ```
 
-`opencv-contrib-python` is required because the LBPH recognizer is part of
-OpenCV's contrib modules. Do not install `opencv-python` alongside it in the
-same environment.
+`opencv-contrib-python` is pinned to a release that includes the Haar cascade
+files used for face and eye detection. LBPH is part of OpenCV's contrib
+modules. Do not install `opencv-python` alongside it in the same environment.
 
 ## Deploy the API to Render
 

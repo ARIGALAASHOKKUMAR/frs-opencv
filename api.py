@@ -100,6 +100,12 @@ def decode_frame(encoded_image):
 
 @app.get("/health")
 def health():
+    try:
+        get_cascades()
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=503, detail=f"OpenCV face-recognition setup failed: {error}"
+        ) from error
     return {"status": "ok"}
 
 

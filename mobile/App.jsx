@@ -31,10 +31,15 @@ async function requestApi(baseUrl, path, body) {
     );
   }
 
+  const responseText = await response.text();
   let result;
   try {
-    result = await response.json();
+    result = JSON.parse(responseText);
   } catch {
+    if (!response.ok) {
+      const body = responseText.trim().slice(0, 240) || 'Empty response body.';
+      throw new Error(`The API returned HTTP ${response.status}: ${body}`);
+    }
     throw new Error(`The API returned an invalid response (HTTP ${response.status}).`);
   }
   if (!response.ok) {
