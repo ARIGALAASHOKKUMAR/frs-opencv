@@ -4,7 +4,6 @@
 import base64
 import binascii
 import csv
-import hmac
 import json
 import os
 import threading
@@ -17,9 +16,6 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 from attendance import (
     ATTENDANCE_PATH,
@@ -37,34 +33,6 @@ from attendance import (
 
 
 app = FastAPI(title="Face Attendance API")
-
-
-class ApiTokenMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path.startswith("/api/") and request.method != "OPTIONS":
-            expected_token = os.environ.get("API_ACCESS_TOKEN", "")
-            if not expected_token:
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": "API_ACCESS_TOKEN is not configured."},
-                )
-            scheme, separator, supplied_token = request.headers.get(
-                "authorization", ""
-            ).partition(" ")
-            if (
-                not separator
-                or scheme.lower() != "bearer"
-                or not hmac.compare_digest(supplied_token, expected_token)
-            ):
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "A valid bearer token is required."},
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-        return await call_next(request)
-
-
-app.add_middleware(ApiTokenMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

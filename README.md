@@ -22,43 +22,33 @@ same environment.
 
 ## Deploy the API to Render
 
-This demo can be deployed as a private-use service on Render. The API requires
-a bearer token, and the face model, profile, and CSV are stored on a Render
-persistent disk. The persistent disk requires a paid Render web service plan.
-Do not use this sample as a public or production attendance system.
+This demo can be deployed on Render. The face model, profile, and CSV are stored
+on a Render persistent disk. The persistent disk requires a paid Render web
+service plan. The API is publicly accessible without authentication; anyone
+who knows the service URL can register a replacement face or access attendance
+records. Only use it with test data you are comfortable exposing.
 
 1. Push this project to a Git provider that Render can access.
 2. In Render, choose **New → Blueprint**, select the repository, and deploy
    `render.yaml` from the project root.
-3. Generate a long random token locally:
-
-   ```bash
-   python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
-   ```
-
-4. Enter that token as `API_ACCESS_TOKEN` when Render asks for the unsynced
-   secret. Keep it private.
-5. After the service is live, copy its HTTPS URL, such as
+3. After the service is live, copy its HTTPS URL, such as
    `https://face-attendance-api.onrender.com`.
-6. In the Expo app, enter that URL and the exact `API_ACCESS_TOKEN` you
-   configured in Render, then tap **Connect**.
+4. In the Expo app, enter that URL and tap **Connect**.
 
 The app sends camera images to the deployed service for recognition. The
 registered face model, profile, and attendance CSV are stored on its persistent
-disk. The bearer token protects API endpoints but is a shared secret suitable
-only for this private test app; do not distribute the app or token publicly.
+disk. There is no API access control; do not use real or sensitive data or
+distribute this configuration for production use.
 
 ## Run the API locally
 
-The API also requires a token when running locally. In one terminal, generate
-a token and set it before starting the API:
+Start the API locally:
 
 ```bash
-export API_ACCESS_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 python -m uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-Enter the same token in the Expo app. On a physical phone, use
+On a physical phone, use
 `http://<your-computer-LAN-IP>:8000`; on Android emulator use
 `http://10.0.2.2:8000`; on iOS simulator use `http://127.0.0.1:8000`.
 For a physical phone, confirm the URL loads from the phone's browser, use the

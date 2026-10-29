@@ -15,10 +15,8 @@ import {
 
 const REQUIRED_SAMPLES = 30;
 
-async function requestApi(baseUrl, accessToken, path, body) {
-  const headers = {
-    Authorization: `Bearer ${accessToken.trim()}`,
-  };
+async function requestApi(baseUrl, path, body) {
+  const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let response;
   try {
@@ -48,7 +46,6 @@ async function requestApi(baseUrl, accessToken, path, body) {
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const [apiUrl, setApiUrl] = useState('https://frs-opencv.onrender.com');
-  const [accessToken, setAccessToken] = useState('');
   const [name, setName] = useState('');
   const [profile, setProfile] = useState(null);
   const [events, setEvents] = useState([]);
@@ -63,28 +60,28 @@ export default function App() {
   const busyRef = useRef(false);
 
   const refreshStatus = useCallback(async () => {
-    const result = await requestApi(apiUrl, accessToken, '/api/status');
+    const result = await requestApi(apiUrl, '/api/status');
     setProfile(result.registered ? result.name : null);
     setEvents(result.events || []);
     return result;
-  }, [accessToken, apiUrl]);
+  }, [apiUrl]);
 
   const stopFlow = useCallback(() => {
     const current = modeRef.current;
     modeRef.current = { type: 'idle', sessionId: null };
     setMode('idle');
     if (current.type === 'register') {
-      requestApi(apiUrl, accessToken, '/api/register/cancel', {}).catch((error) => {
+      requestApi(apiUrl, '/api/register/cancel', {}).catch((error) => {
         setStatus(`Stopped on this device. Could not cancel on the server: ${error.message}`);
       });
     } else if (current.type === 'attendance' && current.sessionId) {
-      requestApi(apiUrl, accessToken, '/api/attendance/cancel', {
+      requestApi(apiUrl, '/api/attendance/cancel', {
         session_id: current.sessionId,
       }).catch((error) => {
         setStatus(`Stopped on this device. Could not cancel on the server: ${error.message}`);
       });
     }
-  }, [accessToken, apiUrl]);
+  }, [apiUrl]);
 
   useEffect(() => {
     if (mode === 'idle' || !cameraReady) return undefined;
@@ -102,7 +99,7 @@ export default function App() {
 
         const current = modeRef.current;
         if (current.type === 'register') {
-          const result = await requestApi(apiUrl, accessToken, '/api/register/frame', {
+          const result = await requestApi(apiUrl, '/api/register/frame', {
             image: photo.base64,
           });
           if (result.status === 'registered') {
@@ -123,7 +120,7 @@ export default function App() {
             );
           }
         } else if (current.type === 'attendance') {
-          const result = await requestApi(apiUrl, accessToken, '/api/attendance/frame', {
+          const result = await requestApi(apiUrl, '/api/attendance/frame', {
             session_id: current.sessionId,
             image: photo.base64,
           });
@@ -144,12 +141,12 @@ export default function App() {
       }
     }, 850);
     return () => clearInterval(timer);
-  }, [accessToken, apiUrl, cameraReady, mode, refreshStatus]);
+  }, [apiUrl, cameraReady, mode, refreshStatus]);
 
   const connect = async () => {
     Keyboard.dismiss();
-    if (!apiUrl.trim() || !accessToken.trim()) {
-      setStatus('Enter the deployed API URL and access token first.');
+    if (!apiUrl.trim()) {
+      setStatus('Enter the deployed API URL first.');
       return;
     }
     setLoading(true);
@@ -169,8 +166,8 @@ export default function App() {
 
   const startRegistration = async () => {
     Keyboard.dismiss();
-    if (!apiUrl.trim() || !accessToken.trim()) {
-      setStatus('Enter the deployed API URL and access token first.');
+    if (!apiUrl.trim()) {
+      setStatus('Enter the deployed API URL first.');
       return;
     }
     if (!name.trim()) {
@@ -186,7 +183,7 @@ export default function App() {
     }
     setLoading(true);
     try {
-      await requestApi(apiUrl, accessToken, '/api/register/start', { name: name.trim() });
+      await requestApi(apiUrl, '/api/register/start', { name: name.trim() });
       modeRef.current = { type: 'register', sessionId: null };
       setProgress(0);
       setMode('register');
@@ -200,8 +197,8 @@ export default function App() {
 
   const startAttendance = async (action) => {
     Keyboard.dismiss();
-    if (!apiUrl.trim() || !accessToken.trim()) {
-      setStatus('Enter the deployed API URL and access token first.');
+    if (!apiUrl.trim()) {
+      setStatus('Enter the deployed API URL first.');
       return;
     }
     if (!profile) {
@@ -217,7 +214,7 @@ export default function App() {
     }
     setLoading(true);
     try {
-      const result = await requestApi(apiUrl, accessToken, '/api/attendance/start', { action });
+      const result = await requestApi(apiUrl, '/api/attendance/start', { action });
       modeRef.current = { type: 'attendance', sessionId: result.session_id };
       setMode('attendance');
       setStatus(`Ready for ${action}. Look at the camera, then blink.`);
@@ -244,7 +241,7 @@ export default function App() {
         <Text style={styles.subtitle}>Register one face, then blink to clock in or out.</Text>
 
         <View style={styles.card}>
-          <Text style={styles.label}>DEPLOYED PYTHON API</Text>
+          <Text style={styles.label}>PYTHON API</Text>
           <View style={styles.urlRow}>
             <TextInput
               value={apiUrl}
@@ -263,21 +260,6 @@ export default function App() {
           </View>
           <Text style={styles.helpText}>
             Paste the HTTPS URL shown by Render after deployment.
-          </Text>
-          <Text style={styles.label}>API ACCESS TOKEN</Text>
-          <TextInput
-            value={accessToken}
-            onChangeText={setAccessToken}
-            placeholder="Paste the API_ACCESS_TOKEN you configured on Render"
-            placeholderTextColor="#728094"
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry
-            style={styles.input}
-            editable={!cameraActive}
-          />
-          <Text style={styles.helpText}>
-            Keep this token private. It is not saved by the app and must be entered again if you restart it.
           </Text>
         </View>
 

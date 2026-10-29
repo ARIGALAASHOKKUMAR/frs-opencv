@@ -11,5 +11,3 @@ services:
     envVars:
       - key: FACE_DATA_DIR
         value: /var/data/face_data
-      - key: API_ACCESS_TOKEN
-        sync: false
